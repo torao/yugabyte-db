@@ -24,14 +24,23 @@
 
 #include "yb/util/scope_exit.h"
 
+using std::chrono::milliseconds;
+using std::chrono::seconds;
+using std::chrono::duration;
+
 namespace yb::tserver {
 
 namespace {
 
 class CacheEntry {
  public:
-  CacheEntry() : future_(promise_.get_future()) {
-  }
+  CacheEntry()
+      : future_(promise_.get_future()),
+        timeout_error_(STATUS(TimedOut, "Cache retrieval timed-out")),
+        deferred_error_(STATUS(
+            IllegalState,
+            "The operation has not been scheduled for execution yet; this is likely due to using "
+            "deferred execution mode with std::async")) {}
 
   void SetValue(const Result<client::YBTablePtr>& value) {
     promise_.set_value(value);
@@ -40,6 +49,19 @@ class CacheEntry {
 
   const Result<client::YBTablePtr>& Get() const {
     return future_.get();
+  }
+
+  template <typename Rep = int64_t, typename Period = std::milli>
+  const Result<client::YBTablePtr>& Get(const duration<Rep, Period>& timeout) const {
+    auto status = future_.wait_for(timeout);
+    switch (status) {
+      case std::future_status::ready:
+        return future_.get();
+      case std::future_status::timeout:
+        return timeout_error_;
+      case std::future_status::deferred:
+        return deferred_error_;
+    }
   }
 
   master::GetTableSchemaResponsePB& schema() {
@@ -55,6 +77,8 @@ class CacheEntry {
   std::promise<Result<client::YBTablePtr>> promise_;
   std::shared_future<Result<client::YBTablePtr>> future_;
   master::GetTableSchemaResponsePB schema_;
+  Result<client::YBTablePtr> timeout_error_;
+  Result<client::YBTablePtr> deferred_error_;
 };
 
 Result<client::YBTablePtr> CheckTableType(const Result<client::YBTablePtr>& result) {
@@ -80,7 +104,7 @@ class PgTableCache::Impl {
       client::YBTablePtr* table,
       master::GetTableSchemaResponsePB* schema) {
     auto entry = GetEntry(table_id, include_hidden);
-    const auto& table_result = entry->Get();
+    const auto& table_result = entry->Get(seconds(5));
     RETURN_NOT_OK(table_result);
     *table = *table_result;
     *schema = entry->schema();
@@ -88,7 +112,7 @@ class PgTableCache::Impl {
   }
 
   Result<client::YBTablePtr> Get(const TableId& table_id) {
-    return GetEntry(table_id)->Get();
+    return GetEntry(table_id)->Get(seconds(5));
   }
 
   void Invalidate(const TableId& table_id) {
