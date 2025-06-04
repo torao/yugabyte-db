@@ -102,6 +102,7 @@ jobs:
                 ( set -x; which cmake )
                 set -e
                 chown -R yugabyteci .
+                python3 --version
                 sudo -u yugabyteci bash -c "
                   set -euo pipefail
                   export PATH=/usr/local/bin:\$PATH
