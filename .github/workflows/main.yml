@@ -35,7 +35,7 @@ jobs:
      
       # Archive resulting files as artifacts
       - name: Archive Results
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: threagile-report
           path: threagile/output
